@@ -14,7 +14,7 @@
 
 ## 1. TL;DR
 
-- **What**: Google スプレッドシート + Apps Script で動くタスク管理表。タスク / リマインド / 企業 / 日報 / URL の 5 シートを 1 ファイルに集約。
+- **What**: Google スプレッドシート + Apps Script で動くタスク管理表。タスク / 会議日程 / リマインド / 企業 / 日報 / URL の 6 シートを 1 ファイルに集約。
 - **Why**: スプレッドシート分散運用を 1 画面に統合し、SMTG 前日リマインドを自動化して抜け漏れを防ぐ。共有しやすさを最優先するため Web アプリではなく Sheets 上に実装する。
 - **Success**: 1 ファイルで全業務情報を管理でき、SMTG 予定の前営業日に 100% 自動でリマインドが生成されること。Google Cloud Console の設定なしで動作すること。
 
@@ -29,11 +29,12 @@
 
 ### Goals
 
-- [x] G1: 6 シート構成で全業務情報を 1 スプレッドシートに集約 (タスク / リマインド / 企業 / 日報 / URL / 設定)
-- [x] G2: Google Calendar の SMTG 予定を検出し、土日・日本祝日をスキップした前営業日にリマインドタスクを自動生成
-- [x] G3: 全シートで新規追加・編集・削除が画面内で完結し、状況プルダウンで自動色分け、日付セルで日付ピッカーが開く
-- [x] G4: Google Cloud Console の設定なしで動作 (Apps Script の OAuth スコープのみで完結)
-- [x] G5: スプレッドシートを共有すれば共有相手も同じ機能を利用できる
+- [x] G1: 7 シート構成で全業務情報を 1 スプレッドシートに集約 (タスク / 会議日程 / リマインド / 企業 / 日報 / URL / 設定)
+- [x] G2: Google Calendar の予定一覧をスプレッドシートに自動反映 (毎朝6時更新、過去日数〜先読み日数の範囲)
+- [x] G3: Google Calendar の SMTG 予定を検出し、土日・日本祝日をスキップした前営業日にリマインドタスクを自動生成
+- [x] G4: 全シートで新規追加・編集・削除が画面内で完結し、状況プルダウンで自動色分け、日付セルで日付ピッカーが開く
+- [x] G5: Google Cloud Console の設定なしで動作 (Apps Script の OAuth スコープのみで完結)
+- [x] G6: スプレッドシートを共有すれば共有相手も同じ機能を利用できる
 
 ### Non-Goals
 
@@ -54,63 +55,75 @@
 - AC-01-2: **Given** タスク一覧シートの状況セル, **When** プルダウンから「未着手 / 進行中 / 依頼中 / 完了」のいずれかを選ぶ, **Then** それぞれ赤系 / 黄系 / グレー系 / 黄緑系の背景色とフォント色が即時反映される。
 - AC-01-3: **Given** タスク一覧シートの期日セル, **When** ダブルクリック, **Then** Google Sheets の標準日付ピッカーが開き、日付を選択すると `yyyy/mm/dd` 書式で値が確定する。直接の文字入力は受け付けない (データ検証で拒否)。
 
-### US-02: SMTG 前営業日に自動でリマインドが生成される
+### US-02: カレンダーの予定一覧を一目で確認する
+
+**As a** 業務担当者, **I want** 設定した Google カレンダーの予定がスプレッドシート上に一覧で見える, **so that** カレンダーアプリを開かずとも今日以降の会議を確認できる.
+
+**AC**:
+- AC-02-1: **Given** 設定シートで指定したカレンダーに予定が複数ある, **When** メニュー「会議日程を今すぐ更新」を実行, **Then** 「会議日程」シートに開始日時/終了日時/タイトル/場所/説明/終日/カレンダー名/イベントID の8列で全予定が時系列(開始時刻昇順)で書き込まれる。
+- AC-02-2: **Given** 同期実行, **When** 取得期間, **Then** (今日 - 過去日数) 〜 (今日 + 先読み日数) の範囲(設定シートで調整可、デフォルトは過去3日〜先14日)。
+- AC-02-3: **Given** 同期実行, **When** 既存データが残っている, **Then** ヘッダー以外の全行をクリアしてから書き込む(スナップショット方式、UI操作で更新済の行は失われる)。
+- AC-02-4: **Given** 終日予定, **When** 表示, **Then** 終日列に「○」が入り、開始/終了日時は時刻を含まない `yyyy/MM/dd (E)` 形式。
+- AC-02-5: **Given** 開始日時が今日以降の行, **When** 表示, **Then** 薄い青背景 + 太字でハイライト(条件付き書式)。
+- AC-02-6: 毎朝 6:00 JST に自動同期される(`installDailyTriggers_` が登録)。
+
+### US-03: SMTG 前営業日に自動でリマインドが生成される
 
 **As a** 業務担当者, **I want** カレンダー内の "SMTG" を含む予定の前営業日にリマインドが入る, **so that** 準備メール作成を忘れない.
 
 **AC**:
-- AC-02-1: **Given** 設定シートのカレンダーIDで指定したカレンダーに `[SMTG] A社 2026-05-12(火) 10:00` の予定がある, **When** 日次バッチ (6:00 JST) または手動で「SMTG リマインドを今すぐ作成」を実行, **Then** 期日 `2026-05-11(月)` のリマインド行がリマインドメールタスクシートに生成される。
-- AC-02-2: **Given** SMTG が月曜日, **When** バッチ実行, **Then** 期日は前々金曜 (土日スキップ)。
-- AC-02-3: **Given** SMTG 前日が日本の祝日, **When** バッチ実行, **Then** 期日はその直前の営業日 (祝日スキップ)。祝日判定には Google 公開カレンダー `ja.japanese#holiday@group.v.calendar.google.com` を参照する。
-- AC-02-4: **Given** 同じ Google Calendar イベントに対して既存のリマインド行が存在する, **When** バッチ実行, **Then** 重複行は生成されない (idempotent)。
-- AC-02-5: **Given** 設定シートの SMTG キーワードが `SMTG`, **When** 予定タイトルが `smtg定例` (小文字), **Then** 部分一致・大小無視でマッチして対象になる。
+- AC-03-1: **Given** 設定シートのカレンダーIDで指定したカレンダーに `[SMTG] A社 2026-05-12(火) 10:00` の予定がある, **When** 日次バッチ (6:00 JST) または手動で「SMTG リマインドを今すぐ作成」を実行, **Then** 期日 `2026-05-11(月)` のリマインド行がリマインドメールタスクシートに生成される。
+- AC-03-2: **Given** SMTG が月曜日, **When** バッチ実行, **Then** 期日は前々金曜 (土日スキップ)。
+- AC-03-3: **Given** SMTG 前日が日本の祝日, **When** バッチ実行, **Then** 期日はその直前の営業日 (祝日スキップ)。祝日判定には Google 公開カレンダー `ja.japanese#holiday@group.v.calendar.google.com` を参照する。
+- AC-03-4: **Given** 同じ Google Calendar イベントに対して既存のリマインド行が存在する, **When** バッチ実行, **Then** 重複行は生成されない (idempotent)。
+- AC-03-5: **Given** 設定シートの SMTG キーワードが `SMTG`, **When** 予定タイトルが `smtg定例` (小文字), **Then** 部分一致・大小無視でマッチして対象になる。
 
-### US-03: 企業情報を一覧管理する
-
-**AC**:
-- AC-03-1: ユニット列は `SP / CM / AI / BO / 秘書 / HR / DW` のプルダウンで選択する。データ検証で他の値は受け付けない。
-- AC-03-2: 議事録URL列に URL を入力すると、Google Sheets 標準の動作で別タブ遷移可能なリンクとして表示される。
-- AC-03-3: アサイン日列はタスク一覧の期日と同じ日付ピッカーで入力する。
-
-### US-04: 日報フォーマットをコピーして毎日蓄積する
+### US-04: 企業情報を一覧管理する
 
 **AC**:
-- AC-04-1: メニュー「タスク管理 → 日報フォーマットを表示」を実行すると、設定シートで指定された日報テンプレートが当日日付で展開され、モーダルダイアログに表示される。
-- AC-04-2: ダイアログ内の「クリップボードにコピーして閉じる」ボタンを押すと、テンプレート全文がクリップボードに保存され、ダイアログが閉じる。
-- AC-04-3: 過去の日報は日報シートに行追加で蓄積され、日付列で降順ソート可能。
+- AC-04-1: ユニット列は `SP / CM / AI / BO / 秘書 / HR / DW` のプルダウンで選択する。データ検証で他の値は受け付けない。
+- AC-04-2: 議事録URL列に URL を入力すると、Google Sheets 標準の動作で別タブ遷移可能なリンクとして表示される。
+- AC-04-3: アサイン日列はタスク一覧の期日と同じ日付ピッカーで入力する。
 
-### US-05: URL 集を管理する
-
-**AC**:
-- AC-05-1: タイトル / URL / カテゴリ / メモの 4 列で CRUD できる。
-
-### US-06: 自分の Google カレンダーを設定する
+### US-05: 日報フォーマットをコピーして毎日蓄積する
 
 **AC**:
-- AC-06-1: 設定シートの「カレンダーID」セル (B2) に `primary` または `xxx@group.calendar.google.com` 形式の ID を入力する。`primary` の場合はメインカレンダーが対象になる。
-- AC-06-2: 初回 `setupAll` 実行時に Google が標準の OAuth 同意ダイアログを表示し、ユーザーがカレンダー読み取り権限を許可することで連携が完了する。Google Cloud Console での OAuth クライアント作成は不要。
+- AC-05-1: メニュー「タスク管理 → 日報フォーマットを表示」を実行すると、設定シートで指定された日報テンプレートが当日日付で展開され、モーダルダイアログに表示される。
+- AC-05-2: ダイアログ内の「クリップボードにコピーして閉じる」ボタンを押すと、テンプレート全文がクリップボードに保存され、ダイアログが閉じる。
+- AC-05-3: 過去の日報は日報シートに行追加で蓄積され、日付列で降順ソート可能。
 
-### US-07: 改善アイデアを投稿する
-
-**AC**:
-- AC-07-1: メニュー「タスク管理 → 改善アイデアを送る」を実行するとカテゴリ選択 + 自由記述のダイアログが開く。
-- AC-07-2: 送信した内容は非表示シート「改善アイデア」に投稿日時 / カテゴリ / 内容の 3 列で追記される。
-
-### US-08: スプレッドシートを共有する
+### US-06: URL 集を管理する
 
 **AC**:
-- AC-08-1: スプレッドシート右上の「共有」ボタンから個別招待またはリンク共有が可能。
-- AC-08-2: 共有相手 (編集者権限) は同じメニュー「タスク管理」と Apps Script 機能を利用できる。
+- AC-06-1: タイトル / URL / カテゴリ / メモの 4 列で CRUD できる。
+
+### US-07: 自分の Google カレンダーを設定する
+
+**AC**:
+- AC-07-1: 設定シートの「カレンダーID」セル (B2) に `primary` または `xxx@group.calendar.google.com` 形式の ID を入力する。`primary` の場合はメインカレンダーが対象になる。
+- AC-07-2: 初回 `setupAll` 実行時に Google が標準の OAuth 同意ダイアログを表示し、ユーザーがカレンダー読み取り権限を許可することで連携が完了する。Google Cloud Console での OAuth クライアント作成は不要。
+
+### US-08: 改善アイデアを投稿する
+
+**AC**:
+- AC-08-1: メニュー「タスク管理 → 改善アイデアを送る」を実行するとカテゴリ選択 + 自由記述のダイアログが開く。
+- AC-08-2: 送信した内容は非表示シート「改善アイデア」に投稿日時 / カテゴリ / 内容の 3 列で追記される。
+
+### US-09: スプレッドシートを共有する
+
+**AC**:
+- AC-09-1: スプレッドシート右上の「共有」ボタンから個別招待またはリンク共有が可能。
+- AC-09-2: 共有相手 (編集者権限) は同じメニュー「タスク管理」と Apps Script 機能を利用できる。
 
 ## 5. Functional Requirements (EARS)
 
-- **FR-01**: The system SHALL initialize 7 sheets (タスク一覧 / リマインドメールタスク / 企業リスト / 日報 / URL / 設定 / 改善アイデア) when `setupAll` is invoked.
-- **FR-02**: The system SHALL register a custom menu titled "タスク管理" via `onOpen` trigger with 7 items: 初期セットアップ / タスク追加 / SMTG リマインドを今すぐ作成 / 日報フォーマットを表示 / カレンダー設定を開く / 改善アイデアを送る / 使い方を表示.
+- **FR-01**: The system SHALL initialize 8 sheets (タスク一覧 / 会議日程 / リマインドメールタスク / 企業リスト / 日報 / URL / 設定 / 改善アイデア) when `setupAll` is invoked.
+- **FR-02**: The system SHALL register a custom menu titled "タスク管理" via `onOpen` trigger with 8 items: 初期セットアップ / タスク追加 / 会議日程を今すぐ更新 / SMTG リマインドを今すぐ作成 / 日報フォーマットを表示 / カレンダー設定を開く / 改善アイデアを送る / 使い方を表示.
 - **FR-03**: When the user invokes "タスク追加", the system SHALL insert a new row at index 2 in タスク一覧, populate columns A and G with current date and "未着手" respectively, and move the active range to B2.
 - **FR-04**: While the 状況 column holds value `未着手`, the system SHALL render the cell with red background (`#fde7e9`) and red text (`#d93025`) via conditional formatting. Equivalent rules apply for `進行中` (yellow), `依頼中` (gray), `完了` (green).
 - **FR-05**: The system SHALL apply data validation `requireDate()` to the 期日 (タスク一覧 D列) and アサイン日 (企業リスト C列) columns, rejecting non-date input.
 - **FR-06**: The system SHALL apply data validation `requireValueInList(...)` with `setAllowInvalid(false)` to: 優先度 (タスク一覧 E列), 状況 (タスク一覧 G列, リマインド D列), ユニット (企業リスト B列).
-- **FR-07**: The system SHALL register a time-based trigger executing `scanSmtgReminders` every day at 06:00 in `Asia/Tokyo` timezone when `setupAll` is invoked.
+- **FR-07**: The system SHALL register two time-based triggers executing `syncCalendarEvents` and `scanSmtgReminders` every day at 06:00 in `Asia/Tokyo` timezone when `setupAll` is invoked.
 - **FR-08**: When `scanSmtgReminders` runs, the system SHALL fetch events from the calendar specified by 設定シート B2 within the next N days where N is 設定シート B4 (default 14), filter events whose title contains 設定シート B3 keyword (default `SMTG`) case-insensitively, and create a row in リマインドメールタスク for each matched event.
 - **FR-09**: When determining the due date, the system SHALL compute the previous business day by stepping back from the SMTG date, skipping Saturdays, Sundays, and Japan public holidays as listed in `ja.japanese#holiday@group.v.calendar.google.com`.
 - **FR-10**: If a row in リマインドメールタスク already exists with the same Google Calendar event ID (column E), the system SHALL NOT create a duplicate row.
@@ -118,6 +131,9 @@
 - **FR-12**: The system SHALL persist user-submitted improvement ideas to the 改善アイデア sheet with timestamp / category / content columns when "改善アイデアを送る" is submitted.
 - **FR-13**: The system MUST NOT request OAuth scopes other than: `spreadsheets.currentonly`, `calendar.readonly`, `script.scriptapp`, `script.container.ui`.
 - **FR-14**: If the calendar specified in 設定シート B2 cannot be resolved, the system SHALL show an alert with text instructing the user to check the calendar ID, without throwing an unhandled exception.
+- **FR-15**: When `syncCalendarEvents` runs, the system SHALL fetch all events from the calendar specified by 設定シート B2 within the range (today - past_days) to (today + lookahead_days), clear existing rows in the 会議日程 sheet (preserving header), and write rows sorted by start time ascending.
+- **FR-16**: While the 開始日時 column in 会議日程 contains a date string whose first 10 characters are `>=` today (in `YYYY/MM/DD` format), the system SHALL render the row with light-blue background (`#e8f0fe`) and bold text via conditional formatting.
+
 
 ## 6. Non-Functional Requirements
 
@@ -221,18 +237,19 @@ function isJapanHoliday(d):
 | T-02: メニュー登録 (onOpen) | FR-02 | 完了 |
 | T-03: タスク追加機能 | FR-03, AC-01-1 | 完了 |
 | T-04: 状況プルダウンと条件付き書式 | FR-04, AC-01-2 | 完了 |
-| T-05: 日付ピッカー (データ検証) | FR-05, AC-01-3, AC-03-3 | 完了 |
-| T-06: enum プルダウン (優先度・状況・ユニット) | FR-06, AC-03-1 | 完了 |
+| T-05: 日付ピッカー (データ検証) | FR-05, AC-01-3, AC-04-3 | 完了 |
+| T-06: enum プルダウン (優先度・状況・ユニット) | FR-06, AC-04-1 | 完了 |
 | T-07: デイリートリガー登録 | FR-07 | 完了 |
-| T-08: SMTG リマインド スキャン | FR-08, AC-02-1, AC-02-5 | 完了 |
-| T-09: 営業日計算 (土日 + 日本祝日) | FR-09, AC-02-2, AC-02-3 | 完了 |
-| T-10: 重複防止 (idempotency) | FR-10, AC-02-4 | 完了 |
-| T-11: 日報テンプレート ダイアログ | FR-11, AC-04-1, AC-04-2 | 完了 |
-| T-12: 改善アイデア 投稿フォーム | FR-12, AC-07 | 完了 |
-| T-13: 設定シート構築 | AC-06-1 | 完了 |
+| T-08: SMTG リマインド スキャン | FR-08, AC-03-1, AC-03-5 | 完了 |
+| T-09: 営業日計算 (土日 + 日本祝日) | FR-09, AC-03-2, AC-03-3 | 完了 |
+| T-10: 重複防止 (idempotency) | FR-10, AC-03-4 | 完了 |
+| T-11: 日報テンプレート ダイアログ | FR-11, AC-05-1, AC-05-2 | 完了 |
+| T-12: 改善アイデア 投稿フォーム | FR-12, AC-08 | 完了 |
+| T-13: 設定シート構築 | AC-07-1 | 完了 |
 | T-14: HTML インストーラー (バッチ不要) | - | 完了 |
 | T-15: GitHub Pages ホスト | - | 完了 |
 | T-16: README + SETUP_GUIDE.md | - | 完了 |
+| T-17: 会議日程シート + syncCalendarEvents | FR-01, FR-15, FR-16, AC-02 | 完了 |
 
 ## 10. Delivery
 

@@ -3,16 +3,18 @@
  *
  * シート構成:
  *   1. タスク一覧
- *   2. リマインドメールタスク
- *   3. 企業リスト
- *   4. 日報
- *   5. URL
- *   6. 設定 (カレンダー連携の設定)
+ *   2. 会議日程 (Google Calendar の予定一覧)
+ *   3. リマインドメールタスク
+ *   4. 企業リスト
+ *   5. 日報
+ *   6. URL
+ *   7. 設定 (カレンダー連携の設定)
  *
  * 主な機能:
  *   - メニュー「タスク管理」から各操作
  *   - タスク追加で先頭行に新規行を挿入
  *   - 状況プルダウンの色分け (条件付き書式)
+ *   - 会議日程の自動同期 (毎朝6時)
  *   - SMTG リマインドの自動生成 (毎朝6時、土日祝スキップ)
  *   - 日報フォーマットコピー
  *   - 改善案の投稿
@@ -20,6 +22,7 @@
 
 // ===== 定数 =====
 var SHEET_TASKS    = 'タスク一覧';
+var SHEET_CALENDAR = '会議日程';
 var SHEET_REMIND   = 'リマインドメールタスク';
 var SHEET_COMPANY  = '企業リスト';
 var SHEET_REPORT   = '日報';
@@ -51,6 +54,7 @@ function onOpen() {
     .addItem('初期セットアップ (最初の1回)', 'setupAll')
     .addSeparator()
     .addItem('タスク追加 (上の行に挿入)',     'addTaskRow')
+    .addItem('会議日程を今すぐ更新',           'syncCalendarEvents')
     .addItem('SMTG リマインドを今すぐ作成',    'scanSmtgReminders')
     .addItem('日報フォーマットを表示 (コピー用)', 'showDailyReportTemplate')
     .addSeparator()
@@ -64,6 +68,7 @@ function onOpen() {
 function setupAll() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   setupTasksSheet_(ss);
+  setupCalendarSheet_(ss);
   setupRemindSheet_(ss);
   setupCompanySheet_(ss);
   setupReportSheet_(ss);
@@ -75,12 +80,13 @@ function setupAll() {
   // デフォルトの「シート1」が残っていれば削除
   var blank = ss.getSheetByName('シート1');
   if (blank) ss.deleteSheet(blank);
+  // 自動トリガーをセット (会議日程の同期 + SMTG リマインド)
+  installDailyTriggers_();
   SpreadsheetApp.getUi().alert(
     '初期セットアップ完了',
-    '6つのシートを準備しました。\n\n次のステップ:\n1. 「設定」シートでカレンダーIDを確認\n2. 「タスク管理」メニュー >「SMTG リマインドを今すぐ作成」を実行して動作確認\n\n毎朝6時に自動でリマインドを作成するトリガーも仕掛けますか?',
+    '7つのシートを準備しました。\n\n次のステップ:\n1. 「設定」シートでカレンダーIDを確認\n2. メニュー「会議日程を今すぐ更新」で予定一覧を取り込み\n3. メニュー「SMTG リマインドを今すぐ作成」で動作確認\n\n毎朝6時に自動同期するトリガーは仕掛け済みです。',
     SpreadsheetApp.getUi().ButtonSet.OK
   );
-  installDailyTrigger_();
 }
 
 function setupTasksSheet_(ss) {
@@ -104,6 +110,27 @@ function setupTasksSheet_(ss) {
 
   sheet.setFrozenRows(1);
   // 既定で 50行を空白で確保
+  ensureMinRows_(sheet, 50);
+}
+
+function setupCalendarSheet_(ss) {
+  var sheet = getOrCreateSheet_(ss, SHEET_CALENDAR);
+  sheet.clear();
+  // 既存の条件付き書式もクリア
+  sheet.clearConditionalFormatRules();
+
+  var headers = ['開始日時', '終了日時', '予定タイトル', '場所', '説明', '終日', 'カレンダー名', 'イベントID'];
+  sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+  styleHeader_(sheet.getRange(1, 1, 1, headers.length));
+  setColumnWidths_(sheet, [150, 150, 320, 180, 280, 60, 180, 280]);
+
+  // 説明列 E は折り返し有効
+  sheet.getRange(2, 5, sheet.getMaxRows() - 1, 1).setWrap(true).setVerticalAlignment('top');
+
+  // 「今日以降」の予定を太字でハイライト (条件付き書式)
+  applyTodayHighlight_(sheet, 1);
+
+  sheet.setFrozenRows(1);
   ensureMinRows_(sheet, 50);
 }
 
@@ -174,7 +201,8 @@ function setupSettingsSheet_(ss) {
     ['設定項目', '値', '説明'],
     ['カレンダーID',         'primary', 'メインカレンダーは "primary" のままで OK。\n別のカレンダーを使う場合は Google Calendar の「設定と共有 → カレンダーの統合」で取得した ID(...@group.calendar.google.com) を入力。'],
     ['SMTG キーワード',      'SMTG',    '予定タイトルにこのキーワード(部分一致、大小無視)を含む予定をリマインド対象にします。'],
-    ['先読み日数',           14,        '今日から何日先までのカレンダーをスキャンするか(整数)。'],
+    ['先読み日数',           14,        '今日から何日先までのカレンダーをスキャンするか(整数)。会議日程シートと SMTG リマインドの両方に使われます。'],
+    ['過去日数',             3,         '会議日程シートに何日前までの予定を残すか(整数)。0 にすると今日以降のみ。'],
     ['日報テンプレート',     defaultDailyReportTemplate_(), '日報の雛形。「日報フォーマットを表示」のときにここの内容が表示されます。'],
   ];
   sheet.getRange(1, 1, data.length, 3).setValues(data);
@@ -219,6 +247,91 @@ function addTaskRow() {
   ss.setActiveSheet(sheet);
   // 企業名セルにフォーカス
   sheet.setActiveRange(sheet.getRange(2, 2));
+}
+
+// ===== 会議日程の同期 (カレンダー全予定をシートに反映) =====
+function syncCalendarEvents() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(SHEET_CALENDAR);
+  if (!sheet) {
+    SpreadsheetApp.getUi().alert('先に「初期セットアップ」を実行してください');
+    return;
+  }
+
+  var settings = readSettings_();
+  var calendar = settings.calendarId === 'primary'
+    ? CalendarApp.getDefaultCalendar()
+    : CalendarApp.getCalendarById(settings.calendarId);
+
+  if (!calendar) {
+    SpreadsheetApp.getUi().alert(
+      'カレンダーが見つかりません',
+      '「設定」シートのカレンダーIDを確認してください。',
+      SpreadsheetApp.getUi().ButtonSet.OK
+    );
+    return;
+  }
+
+  // 範囲: (今日 - 過去日数) 〜 (今日 + 先読み日数)
+  var now = new Date();
+  var pastDays = settings.pastDays || 0;
+  var start = new Date(now.getTime() - pastDays * 24 * 60 * 60 * 1000);
+  start.setHours(0, 0, 0, 0);
+  var end = new Date(now.getTime() + settings.lookaheadDays * 24 * 60 * 60 * 1000);
+  end.setHours(23, 59, 59, 999);
+
+  var events = calendar.getEvents(start, end);
+  // 開始時刻昇順に並び替え
+  events.sort(function(a, b) {
+    return a.getStartTime().getTime() - b.getStartTime().getTime();
+  });
+
+  // 既存データをクリア (ヘッダー行のみ残す)
+  var lastRow = sheet.getLastRow();
+  if (lastRow > 1) {
+    sheet.getRange(2, 1, lastRow - 1, 8).clearContent();
+  }
+
+  if (events.length === 0) {
+    SpreadsheetApp.getUi().alert('対象期間に予定はありません');
+    return;
+  }
+
+  var calName = calendar.getName();
+  var rows = events.map(function(ev) {
+    var startTime = ev.getStartTime();
+    var endTime   = ev.getEndTime();
+    var allDay    = ev.isAllDayEvent();
+    return [
+      Utilities.formatDate(startTime, Session.getScriptTimeZone(), allDay ? 'yyyy/MM/dd (E)' : 'yyyy/MM/dd (E) HH:mm'),
+      Utilities.formatDate(endTime,   Session.getScriptTimeZone(), allDay ? 'yyyy/MM/dd (E)' : 'yyyy/MM/dd (E) HH:mm'),
+      ev.getTitle() || '',
+      ev.getLocation() || '',
+      truncate_(ev.getDescription() || '', 500),
+      allDay ? '○' : '',
+      calName,
+      ev.getId()
+    ];
+  });
+
+  sheet.getRange(2, 1, rows.length, 8).setValues(rows);
+
+  // 説明列の折り返し再適用
+  sheet.getRange(2, 5, rows.length, 1).setWrap(true).setVerticalAlignment('top');
+
+  SpreadsheetApp.getUi().alert(
+    '会議日程の同期完了',
+    '取得期間: ' + Utilities.formatDate(start, Session.getScriptTimeZone(), 'M/d') +
+    ' 〜 ' + Utilities.formatDate(end, Session.getScriptTimeZone(), 'M/d') + '\n' +
+    '反映件数: ' + rows.length + ' 件',
+    SpreadsheetApp.getUi().ButtonSet.OK
+  );
+}
+
+function truncate_(s, max) {
+  if (!s) return '';
+  s = String(s);
+  return s.length > max ? s.slice(0, max) + '...' : s;
 }
 
 // ===== SMTG リマインド自動生成 =====
@@ -358,6 +471,7 @@ function readSettings_() {
     calendarId:     map['カレンダーID']     || 'primary',
     smtgKeyword:    map['SMTG キーワード']  || 'SMTG',
     lookaheadDays:  parseInt(map['先読み日数'] || '14', 10),
+    pastDays:       parseInt(map['過去日数']   || '3', 10),
     reportTemplate: map['日報テンプレート']  || defaultDailyReportTemplate_(),
   };
 }
@@ -406,19 +520,26 @@ function showHelp() {
     '<li>状況列はプルダウンで未着手/進行中/依頼中/完了を選ぶと自動で色分けされます</li>' +
     '<li>期日セルをダブルクリックでカレンダー(日付ピッカー)が開きます</li>' +
     '</ul>' +
-    '<h3>2. リマインドメールタスク</h3><ul>' +
+    '<h3>2. 会議日程</h3><ul>' +
+    '<li>設定したGoogleカレンダーの予定を一覧表示するシートです</li>' +
+    '<li>毎朝6時に自動更新。手動で更新したい時はメニュー「会議日程を今すぐ更新」</li>' +
+    '<li>取得期間: (今日 - 過去日数) 〜 (今日 + 先読み日数)。設定シートで調整可能</li>' +
+    '<li>今日以降の予定は薄い青背景+太字でハイライト</li>' +
+    '</ul>' +
+    '<h3>3. リマインドメールタスク</h3><ul>' +
     '<li>「設定」シートのカレンダーIDを確認(デフォルトは <code>primary</code>=メインカレンダー)</li>' +
     '<li>カレンダーに「SMTG」を含む予定があると、その前営業日に自動でリマインドが入ります</li>' +
     '<li>毎朝6時に自動スキャン。手動で実行したい時はメニューから「SMTG リマインドを今すぐ作成」</li>' +
     '<li>同じ予定に対して既存リマインドがあれば重複生成されません</li>' +
     '</ul>' +
-    '<h3>3. 企業リスト</h3><ul><li>ユニットはプルダウン(SP/CM/AI/BO/秘書/HR/DW)、議事録URLはリンクで開きます</li></ul>' +
-    '<h3>4. 日報</h3><ul><li>「日報フォーマットを表示」でテンプレートをコピーできます。日付は自動挿入されます</li></ul>' +
-    '<h3>5. URL</h3><ul><li>よく使うURLを集めるシートです。タイトル/URL/カテゴリ/メモを記入</li></ul>' +
-    '<h3>6. 設定</h3><ul>' +
+    '<h3>4. 企業リスト</h3><ul><li>ユニットはプルダウン(SP/CM/AI/BO/秘書/HR/DW)、議事録URLはリンクで開きます</li></ul>' +
+    '<h3>5. 日報</h3><ul><li>「日報フォーマットを表示」でテンプレートをコピーできます。日付は自動挿入されます</li></ul>' +
+    '<h3>6. URL</h3><ul><li>よく使うURLを集めるシートです。タイトル/URL/カテゴリ/メモを記入</li></ul>' +
+    '<h3>7. 設定</h3><ul>' +
     '<li>カレンダーID: <code>primary</code> ならメインカレンダー。別カレンダーは Google Calendar の「設定と共有 → カレンダーの統合」で取得</li>' +
     '<li>SMTGキーワード: 大小無視・部分一致でマッチ</li>' +
     '<li>先読み日数: 何日先まで予定をスキャンするか</li>' +
+    '<li>過去日数: 会議日程シートに何日前の予定まで残すか</li>' +
     '<li>日報テンプレート: 日報の雛形。{DATE} が今日の日付に置き換わる</li>' +
     '</ul>'
   ).setWidth(560).setHeight(560);
@@ -426,14 +547,22 @@ function showHelp() {
 }
 
 // ===== 自動トリガー設定 =====
-function installDailyTrigger_() {
+function installDailyTriggers_() {
   // 既存のトリガーを削除して重複を防ぐ
   var triggers = ScriptApp.getProjectTriggers();
   for (var i = 0; i < triggers.length; i++) {
-    if (triggers[i].getHandlerFunction() === 'scanSmtgReminders') {
+    var fn = triggers[i].getHandlerFunction();
+    if (fn === 'scanSmtgReminders' || fn === 'syncCalendarEvents') {
       ScriptApp.deleteTrigger(triggers[i]);
     }
   }
+  // 06:00 JST: 会議日程の同期
+  ScriptApp.newTrigger('syncCalendarEvents')
+    .timeBased()
+    .everyDays(1)
+    .atHour(6)
+    .create();
+  // 06:00 JST: SMTG リマインド作成 (Google が同時刻トリガーを微調整して順次実行)
   ScriptApp.newTrigger('scanSmtgReminders')
     .timeBased()
     .everyDays(1)
@@ -504,6 +633,23 @@ function applyStatusConditionalFormat_(sheet, col) {
     .whenTextEqualTo('依頼中').setBackground(COLOR_GRAY).setFontColor(COLOR_GRAY_BD).setRanges([range]).build());
   rules.push(SpreadsheetApp.newConditionalFormatRule()
     .whenTextEqualTo('完了').setBackground(COLOR_GREEN).setFontColor(COLOR_GREEN_BD).setRanges([range]).build());
+  sheet.setConditionalFormatRules(rules);
+}
+
+function applyTodayHighlight_(sheet, dateCol) {
+  // 開始日時が今日以降の行を太字+薄い青背景でハイライト
+  var range = sheet.getRange(2, 1, sheet.getMaxRows() - 1, sheet.getMaxColumns());
+  var col = dateCol; // 開始日時列 (1-indexed)
+  // 「セルの値の最初の10文字を yyyy/MM/dd 形式の今日と比較」する custom formula
+  var formula = '=AND($A2<>"", LEFT($A2,10) >= TEXT(TODAY(),"YYYY/MM/DD"))';
+  var rule = SpreadsheetApp.newConditionalFormatRule()
+    .whenFormulaSatisfied(formula)
+    .setBackground('#e8f0fe')
+    .setBold(true)
+    .setRanges([range])
+    .build();
+  var rules = sheet.getConditionalFormatRules();
+  rules.push(rule);
   sheet.setConditionalFormatRules(rules);
 }
 
