@@ -246,46 +246,57 @@ function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('タスク管理')
     .addItem('初期セットアップ (最初の1回)', 'setupAll')
+    .addItem('スキーマ更新 (データを保持して書式のみ再適用)', 'updateSchema')
     .addSeparator()
     .addItem('タスク追加 (上の行に挿入)',     'addTaskRow')
     .addItem('会議日程を今すぐ更新',           'syncCalendarEvents')
     .addItem('SMTG リマインドを今すぐ作成',    'scanSmtgReminders')
     .addItem('日報フォーマットを表示 (コピー用)', 'showDailyReportTemplate')
     .addSeparator()
+    .addItem('利用可能なカレンダー一覧を確認', 'listAvailableCalendars')
     .addItem('カレンダー設定を開く',           'openSettings')
     .addItem('改善アイデアを送る',             'showIdeasDialog')
     .addItem('使い方を表示',                   'showHelp')
     .addToUi();
 }
 
-// ===== 初期セットアップ =====
+// ===== 初期セットアップ (新規スプレッドシート用) =====
 function setupAll() {
+  _setup_(true);
+}
+
+// ===== スキーマ更新 (既存データは消さず、ヘッダー/書式/データ検証だけ再適用) =====
+function updateSchema() {
+  _setup_(false);
+}
+
+function _setup_(freshInstall) {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
-  setupTasksSheet_(ss);
-  setupCalendarSheet_(ss);
-  setupRemindSheet_(ss);
-  setupCompanySheet_(ss);
-  setupReportSheet_(ss);
-  setupUrlSheet_(ss);
-  setupSettingsSheet_(ss);
-  setupIdeasSheet_(ss);
+  setupTasksSheet_(ss, freshInstall);
+  setupCalendarSheet_(ss, freshInstall);
+  setupRemindSheet_(ss, freshInstall);
+  setupCompanySheet_(ss, freshInstall);
+  setupReportSheet_(ss, freshInstall);
+  setupUrlSheet_(ss, freshInstall);
+  setupSettingsSheet_(ss, freshInstall);
+  setupIdeasSheet_(ss, freshInstall);
   // 初期表示は タスク一覧 シート
   ss.setActiveSheet(ss.getSheetByName(SHEET_TASKS));
   // デフォルトの「シート1」が残っていれば削除
   var blank = ss.getSheetByName('シート1');
   if (blank) ss.deleteSheet(blank);
-  // 自動トリガーをセット (会議日程の同期 + SMTG リマインド)
+  // 自動トリガーをセット
   installDailyTriggers_();
-  SpreadsheetApp.getUi().alert(
-    '初期セットアップ完了',
-    '7つのシートを準備しました。\n\n次のステップ:\n1. 「設定」シートでカレンダーIDを確認\n2. メニュー「会議日程を今すぐ更新」で予定一覧を取り込み\n3. メニュー「SMTG リマインドを今すぐ作成」で動作確認\n\n毎朝6時に自動同期するトリガーは仕掛け済みです。',
-    SpreadsheetApp.getUi().ButtonSet.OK
-  );
+  var msg = freshInstall
+    ? '7つのシートを新規作成しました。\n\n次のステップ:\n1. 「設定」シートでカレンダーIDを確認 (複数指定可、"all"で全カレンダー)\n2. メニュー「会議日程を今すぐ更新」で予定一覧を取り込み\n3. メニュー「SMTG リマインドを今すぐ作成」で動作確認\n\n毎朝6時の自動同期トリガーも仕掛け済みです。'
+    : '既存データは保持したまま、書式・データ検証・自動トリガーを最新状態に更新しました。';
+  SpreadsheetApp.getUi().alert(freshInstall ? '初期セットアップ完了' : 'スキーマ更新完了', msg, SpreadsheetApp.getUi().ButtonSet.OK);
 }
 
-function setupTasksSheet_(ss) {
+function setupTasksSheet_(ss, fresh) {
+  var existed = !!ss.getSheetByName(SHEET_TASKS);
   var sheet = getOrCreateSheet_(ss, SHEET_TASKS);
-  sheet.clear();
+  if (fresh || !existed) sheet.clear();
   sheet.setHiddenGridlines(false);
 
   var headers = ['タスク追加日', '企業名', 'タスク内容', '期日', '優先度', '詳細', '状況'];
@@ -294,49 +305,47 @@ function setupTasksSheet_(ss) {
 
   setColumnWidths_(sheet, [110, 160, 320, 120, 90, 240, 100]);
 
-  // 期日列 (D, 4) は日付データ検証
   setDateValidation_(sheet, 4);
-  // 優先度列 (E, 5) はプルダウン
   setListValidation_(sheet, 5, PRIORITY_LIST);
-  // 状況列 (G, 7) はプルダウン + 条件付き書式
   setListValidation_(sheet, 7, STATUS_LIST);
   applyStatusConditionalFormat_(sheet, 7);
 
   sheet.setFrozenRows(1);
-  // 既定で 50行を空白で確保
   ensureMinRows_(sheet, 50);
 }
 
-function setupCalendarSheet_(ss) {
+function setupCalendarSheet_(ss, fresh) {
+  var existed = !!ss.getSheetByName(SHEET_CALENDAR);
   var sheet = getOrCreateSheet_(ss, SHEET_CALENDAR);
-  sheet.clear();
-  // 既存の条件付き書式もクリア
-  sheet.clearConditionalFormatRules();
+  if (fresh || !existed) {
+    sheet.clear();
+    sheet.clearConditionalFormatRules();
+  }
 
   var headers = ['開始日時', '終了日時', '予定タイトル', '場所', '説明', '終日', 'カレンダー名', 'イベントID'];
   sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
   styleHeader_(sheet.getRange(1, 1, 1, headers.length));
   setColumnWidths_(sheet, [150, 150, 320, 180, 280, 60, 180, 280]);
 
-  // 説明列 E は折り返し有効
   sheet.getRange(2, 5, sheet.getMaxRows() - 1, 1).setWrap(true).setVerticalAlignment('top');
 
-  // 「今日以降」の予定を太字でハイライト (条件付き書式)
+  // 既存の今日ハイライトルールを除去してから再適用 (重複防止)
+  removeRulesForRange_(sheet, sheet.getRange(2, 1, sheet.getMaxRows() - 1, sheet.getMaxColumns()));
   applyTodayHighlight_(sheet, 1);
 
   sheet.setFrozenRows(1);
   ensureMinRows_(sheet, 50);
 }
 
-function setupRemindSheet_(ss) {
+function setupRemindSheet_(ss, fresh) {
+  var existed = !!ss.getSheetByName(SHEET_REMIND);
   var sheet = getOrCreateSheet_(ss, SHEET_REMIND);
-  sheet.clear();
+  if (fresh || !existed) sheet.clear();
   var headers = ['期日', 'SMTG 開催日時', '対象予定タイトル', '状況', 'カレンダーイベントID'];
   sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
   styleHeader_(sheet.getRange(1, 1, 1, headers.length));
   setColumnWidths_(sheet, [120, 180, 360, 100, 280]);
 
-  // 状況プルダウン + 色分け
   setListValidation_(sheet, 4, ['未着手', '完了']);
   applyStatusConditionalFormat_(sheet, 4);
 
@@ -344,40 +353,42 @@ function setupRemindSheet_(ss) {
   ensureMinRows_(sheet, 30);
 }
 
-function setupCompanySheet_(ss) {
+function setupCompanySheet_(ss, fresh) {
+  var existed = !!ss.getSheetByName(SHEET_COMPANY);
   var sheet = getOrCreateSheet_(ss, SHEET_COMPANY);
-  sheet.clear();
+  if (fresh || !existed) sheet.clear();
   var headers = ['企業名', 'ユニット', 'アサイン日', '支援期間', '議事録URL', '支援責任者', '支援担当者'];
   sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
   styleHeader_(sheet.getRange(1, 1, 1, headers.length));
   setColumnWidths_(sheet, [200, 100, 130, 130, 280, 140, 140]);
 
-  setListValidation_(sheet, 2, UNIT_LIST);  // ユニット
-  setDateValidation_(sheet, 3);             // アサイン日
+  setListValidation_(sheet, 2, UNIT_LIST);
+  setDateValidation_(sheet, 3);
 
   sheet.setFrozenRows(1);
   ensureMinRows_(sheet, 30);
 }
 
-function setupReportSheet_(ss) {
+function setupReportSheet_(ss, fresh) {
+  var existed = !!ss.getSheetByName(SHEET_REPORT);
   var sheet = getOrCreateSheet_(ss, SHEET_REPORT);
-  sheet.clear();
+  if (fresh || !existed) sheet.clear();
   var headers = ['日付', '内容'];
   sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
   styleHeader_(sheet.getRange(1, 1, 1, headers.length));
   setColumnWidths_(sheet, [140, 800]);
   setDateValidation_(sheet, 1);
 
-  // 内容列は折り返し有効
   sheet.getRange(2, 2, sheet.getMaxRows() - 1, 1).setWrap(true).setVerticalAlignment('top');
 
   sheet.setFrozenRows(1);
   ensureMinRows_(sheet, 30);
 }
 
-function setupUrlSheet_(ss) {
+function setupUrlSheet_(ss, fresh) {
+  var existed = !!ss.getSheetByName(SHEET_URL);
   var sheet = getOrCreateSheet_(ss, SHEET_URL);
-  sheet.clear();
+  if (fresh || !existed) sheet.clear();
   var headers = ['タイトル', 'URL', 'カテゴリ', 'メモ'];
   sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
   styleHeader_(sheet.getRange(1, 1, 1, headers.length));
@@ -386,37 +397,70 @@ function setupUrlSheet_(ss) {
   ensureMinRows_(sheet, 30);
 }
 
-function setupSettingsSheet_(ss) {
+function setupSettingsSheet_(ss, fresh) {
+  var existed = !!ss.getSheetByName(SHEET_SETTINGS);
   var sheet = getOrCreateSheet_(ss, SHEET_SETTINGS);
-  sheet.clear();
-  setColumnWidths_(sheet, [220, 380, 280]);
 
-  var data = [
+  // 既存の値を保持しながら説明列・スタイルだけ更新する
+  var existingValues = {};
+  if (existed &amp;&amp; sheet.getLastRow() &gt;= 2) {
+    var prev = sheet.getRange(2, 1, sheet.getLastRow() - 1, 2).getValues();
+    prev.forEach(function(row) {
+      if (row[0]) existingValues[row[0]] = row[1];
+    });
+  }
+
+  if (fresh || !existed) sheet.clear();
+  setColumnWidths_(sheet, [220, 380, 320]);
+
+  var defaults = {
+    'カレンダーID': 'primary',
+    'SMTG キーワード': 'SMTG',
+    '先読み日数': 14,
+    '過去日数': 3,
+    '日報テンプレート': defaultDailyReportTemplate_(),
+  };
+  var rows = [
     ['設定項目', '値', '説明'],
-    ['カレンダーID',         'primary', 'メインカレンダーは "primary" のままで OK。\n別のカレンダーを使う場合は Google Calendar の「設定と共有 → カレンダーの統合」で取得した ID(...@group.calendar.google.com) を入力。'],
-    ['SMTG キーワード',      'SMTG',    '予定タイトルにこのキーワード(部分一致、大小無視)を含む予定をリマインド対象にします。'],
-    ['先読み日数',           14,        '今日から何日先までのカレンダーをスキャンするか(整数)。会議日程シートと SMTG リマインドの両方に使われます。'],
-    ['過去日数',             3,         '会議日程シートに何日前までの予定を残すか(整数)。0 にすると今日以降のみ。'],
-    ['日報テンプレート',     defaultDailyReportTemplate_(), '日報の雛形。「日報フォーマットを表示」のときにここの内容が表示されます。'],
+    ['カレンダーID',
+      pickValue_(existingValues, 'カレンダーID', defaults['カレンダーID']),
+      'メイン1個だけなら "primary" でOK。\n複数のカレンダーから取得したい時は改行(Alt+Enter)で複数IDを入力。\n"all" と書くとあなたがアクセスできる全カレンダーをスキャン。\nIDは Google Calendar 「設定と共有 → カレンダーの統合 → カレンダーID」で取得 (...@group.calendar.google.com 等)。'],
+    ['SMTG キーワード',
+      pickValue_(existingValues, 'SMTG キーワード', defaults['SMTG キーワード']),
+      '予定タイトルにこのキーワード(部分一致、大小無視)を含む予定をリマインド対象にします。'],
+    ['先読み日数',
+      pickValue_(existingValues, '先読み日数', defaults['先読み日数']),
+      '今日から何日先までのカレンダーをスキャンするか(整数)。会議日程シートとSMTGリマインドの両方に使われます。'],
+    ['過去日数',
+      pickValue_(existingValues, '過去日数', defaults['過去日数']),
+      '会議日程シートに何日前までの予定を残すか(整数)。0 にすると今日以降のみ。'],
+    ['日報テンプレート',
+      pickValue_(existingValues, '日報テンプレート', defaults['日報テンプレート']),
+      '日報の雛形。{DATE} が今日の日付に置き換わる。'],
   ];
-  sheet.getRange(1, 1, data.length, 3).setValues(data);
+  sheet.getRange(1, 1, rows.length, 3).setValues(rows);
   styleHeader_(sheet.getRange(1, 1, 1, 3));
 
-  sheet.getRange(2, 2, data.length - 1, 1).setBackground('#fffbf0');
-  sheet.getRange(1, 1, data.length, 3).setBorder(true, true, true, true, true, true, BORDER_COLOR, SpreadsheetApp.BorderStyle.SOLID);
+  sheet.getRange(2, 2, rows.length - 1, 1).setBackground('#fffbf0').setVerticalAlignment('top').setWrap(true);
+  sheet.getRange(1, 1, rows.length, 3).setBorder(true, true, true, true, true, true, BORDER_COLOR, SpreadsheetApp.BorderStyle.SOLID);
   sheet.setFrozenRows(1);
-  sheet.getRange(2, 1, data.length - 1, 3).setVerticalAlignment('top').setWrap(true);
+  sheet.getRange(2, 1, rows.length - 1, 3).setVerticalAlignment('top').setWrap(true);
 }
 
-function setupIdeasSheet_(ss) {
+function pickValue_(map, key, fallback) {
+  return map.hasOwnProperty(key) &amp;&amp; map[key] !== '' &amp;&amp; map[key] != null ? map[key] : fallback;
+}
+
+function setupIdeasSheet_(ss, fresh) {
+  var existed = !!ss.getSheetByName(SHEET_IDEAS);
   var sheet = getOrCreateSheet_(ss, SHEET_IDEAS);
-  sheet.clear();
+  if (fresh || !existed) sheet.clear();
   var headers = ['投稿日時', 'カテゴリ', '内容'];
   sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
   styleHeader_(sheet.getRange(1, 1, 1, headers.length));
   setColumnWidths_(sheet, [150, 120, 600]);
   sheet.setFrozenRows(1);
-  sheet.hideSheet();  // 普段は非表示、必要時に再表示
+  if (fresh || !existed) sheet.hideSheet();
 }
 
 // ===== タスク追加 (上の行に挿入) =====
@@ -443,6 +487,26 @@ function addTaskRow() {
   sheet.setActiveRange(sheet.getRange(2, 2));
 }
 
+// ===== カレンダー解決 (複数指定 / "all" 対応) =====
+function getCalendars_(settings) {
+  var ids = settings.calendarIds || ['primary'];
+  // "all" または "*" で全カレンダー
+  for (var i = 0; i &lt; ids.length; i++) {
+    if (ids[i] === 'all' || ids[i] === '*') {
+      return CalendarApp.getAllCalendars();
+    }
+  }
+  var result = [];
+  for (var j = 0; j &lt; ids.length; j++) {
+    var id = ids[j];
+    var c = (id === 'primary')
+      ? CalendarApp.getDefaultCalendar()
+      : CalendarApp.getCalendarById(id);
+    if (c) result.push(c);
+  }
+  return result;
+}
+
 // ===== 会議日程の同期 (カレンダー全予定をシートに反映) =====
 function syncCalendarEvents() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -453,14 +517,12 @@ function syncCalendarEvents() {
   }
 
   var settings = readSettings_();
-  var calendar = settings.calendarId === 'primary'
-    ? CalendarApp.getDefaultCalendar()
-    : CalendarApp.getCalendarById(settings.calendarId);
+  var calendars = getCalendars_(settings);
 
-  if (!calendar) {
+  if (!calendars || calendars.length === 0) {
     SpreadsheetApp.getUi().alert(
       'カレンダーが見つかりません',
-      '「設定」シートのカレンダーIDを確認してください。',
+      '「設定」シートのカレンダーIDを確認してください。\n"primary" / "all" / 正しいカレンダーID のいずれか。',
       SpreadsheetApp.getUi().ButtonSet.OK
     );
     return;
@@ -474,25 +536,39 @@ function syncCalendarEvents() {
   var end = new Date(now.getTime() + settings.lookaheadDays * 24 * 60 * 60 * 1000);
   end.setHours(23, 59, 59, 999);
 
-  var events = calendar.getEvents(start, end);
-  // 開始時刻昇順に並び替え
-  events.sort(function(a, b) {
-    return a.getStartTime().getTime() - b.getStartTime().getTime();
+  // 全カレンダーから予定を集めてマージ
+  var allEvents = [];
+  for (var i = 0; i &lt; calendars.length; i++) {
+    var cal = calendars[i];
+    try {
+      var evs = cal.getEvents(start, end);
+      for (var j = 0; j &lt; evs.length; j++) {
+        allEvents.push({ ev: evs[j], calName: cal.getName() });
+      }
+    } catch (e) {
+      // アクセス権が無いカレンダーはスキップ
+      console.warn('Skip calendar ' + cal.getId() + ': ' + e);
+    }
+  }
+
+  // 開始時刻昇順
+  allEvents.sort(function(a, b) {
+    return a.ev.getStartTime().getTime() - b.ev.getStartTime().getTime();
   });
 
-  // 既存データをクリア (ヘッダー行のみ残す)
+  // 既存データをクリア (ヘッダー以外)
   var lastRow = sheet.getLastRow();
   if (lastRow &gt; 1) {
     sheet.getRange(2, 1, lastRow - 1, 8).clearContent();
   }
 
-  if (events.length === 0) {
-    SpreadsheetApp.getUi().alert('対象期間に予定はありません');
+  if (allEvents.length === 0) {
+    SpreadsheetApp.getUi().alert('対象期間に予定はありません', 'スキャン対象カレンダー数: ' + calendars.length, SpreadsheetApp.getUi().ButtonSet.OK);
     return;
   }
 
-  var calName = calendar.getName();
-  var rows = events.map(function(ev) {
+  var rows = allEvents.map(function(item) {
+    var ev = item.ev;
     var startTime = ev.getStartTime();
     var endTime   = ev.getEndTime();
     var allDay    = ev.isAllDayEvent();
@@ -503,18 +579,17 @@ function syncCalendarEvents() {
       ev.getLocation() || '',
       truncate_(ev.getDescription() || '', 500),
       allDay ? '○' : '',
-      calName,
+      item.calName,
       ev.getId()
     ];
   });
 
   sheet.getRange(2, 1, rows.length, 8).setValues(rows);
-
-  // 説明列の折り返し再適用
   sheet.getRange(2, 5, rows.length, 1).setWrap(true).setVerticalAlignment('top');
 
   SpreadsheetApp.getUi().alert(
     '会議日程の同期完了',
+    '対象カレンダー: ' + calendars.length + ' 個\n' +
     '取得期間: ' + Utilities.formatDate(start, Session.getScriptTimeZone(), 'M/d') +
     ' 〜 ' + Utilities.formatDate(end, Session.getScriptTimeZone(), 'M/d') + '\n' +
     '反映件数: ' + rows.length + ' 件',
@@ -539,42 +614,47 @@ function scanSmtgReminders() {
   }
 
   var settings = readSettings_();
-  var calendar = settings.calendarId === 'primary'
-    ? CalendarApp.getDefaultCalendar()
-    : CalendarApp.getCalendarById(settings.calendarId);
-
-  if (!calendar) {
+  var calendars = getCalendars_(settings);
+  if (!calendars || calendars.length === 0) {
     SpreadsheetApp.getUi().alert('カレンダーが見つかりません', '「設定」シートのカレンダーIDを確認してください。', SpreadsheetApp.getUi().ButtonSet.OK);
     return;
   }
 
   var now    = new Date();
   var future = new Date(now.getTime() + settings.lookaheadDays * 24 * 60 * 60 * 1000);
-  var events = calendar.getEvents(now, future);
-
   var keyword = settings.smtgKeyword.toLowerCase();
   var existing = readExistingEventIds_(remindSheet);
 
-  var created = 0, skipped = 0;
-  for (var i = 0; i &lt; events.length; i++) {
-    var ev = events[i];
-    var title = ev.getTitle() || '';
-    if (title.toLowerCase().indexOf(keyword) === -1) continue;
-    var evId = ev.getId();
-    if (existing[evId]) { skipped++; continue; }
-
-    var startDate = ev.getStartTime();
-    var dueDate = previousBusinessDay_(startDate);
-    appendRemindRow_(remindSheet, dueDate, startDate, title, evId);
-    created++;
+  var created = 0, skipped = 0, totalMatched = 0;
+  for (var c = 0; c &lt; calendars.length; c++) {
+    var cal = calendars[c];
+    try {
+      var events = cal.getEvents(now, future);
+      for (var i = 0; i &lt; events.length; i++) {
+        var ev = events[i];
+        var title = ev.getTitle() || '';
+        if (title.toLowerCase().indexOf(keyword) === -1) continue;
+        totalMatched++;
+        var evId = ev.getId();
+        if (existing[evId]) { skipped++; continue; }
+        var startDate = ev.getStartTime();
+        var dueDate = previousBusinessDay_(startDate);
+        appendRemindRow_(remindSheet, dueDate, startDate, title, evId);
+        created++;
+      }
+    } catch (e) {
+      console.warn('Skip calendar ' + cal.getId() + ': ' + e);
+    }
   }
 
-  // 期日順でソート
   sortRemindSheet_(remindSheet);
 
   SpreadsheetApp.getUi().alert(
     'SMTG リマインドのスキャン結果',
-    '対象予定: ' + (created + skipped) + ' 件\n新規作成: ' + created + ' 件\n既存で重複: ' + skipped + ' 件',
+    'スキャン対象カレンダー: ' + calendars.length + ' 個\n' +
+    'マッチした予定: ' + totalMatched + ' 件\n' +
+    '新規作成: ' + created + ' 件\n' +
+    '既存で重複(スキップ): ' + skipped + ' 件',
     SpreadsheetApp.getUi().ButtonSet.OK
   );
 }
@@ -661,13 +741,46 @@ function readSettings_() {
   for (var i = 0; i &lt; values.length; i++) {
     map[values[i][0]] = values[i][1];
   }
+  var rawId = String(map['カレンダーID'] || 'primary');
+  // 改行 / カンマ / セミコロン区切りで分解、空白除去
+  var ids = rawId.split(/[\n,;]+/).map(function(s){ return s.trim(); }).filter(function(s){ return s; });
+  if (ids.length === 0) ids = ['primary'];
   return {
-    calendarId:     map['カレンダーID']     || 'primary',
+    calendarIds:    ids,
+    calendarId:     ids[0],  // 互換用 (旧コード参照向け)
     smtgKeyword:    map['SMTG キーワード']  || 'SMTG',
     lookaheadDays:  parseInt(map['先読み日数'] || '14', 10),
     pastDays:       parseInt(map['過去日数']   || '3', 10),
     reportTemplate: map['日報テンプレート']  || defaultDailyReportTemplate_(),
   };
+}
+
+// ===== 利用可能なカレンダー一覧を確認 (デバッグ用) =====
+function listAvailableCalendars() {
+  var calendars = CalendarApp.getAllCalendars();
+  var rows = calendars.map(function(c) {
+    var id = c.getId();
+    var name = c.getName();
+    var isPrimary = (c.getId() === CalendarApp.getDefaultCalendar().getId());
+    return { id: id, name: name, isPrimary: isPrimary };
+  });
+  rows.sort(function(a, b) {
+    if (a.isPrimary &amp;&amp; !b.isPrimary) return -1;
+    if (b.isPrimary &amp;&amp; !a.isPrimary) return 1;
+    return a.name.localeCompare(b.name);
+  });
+
+  var html = '&lt;style&gt;body{font-family:-apple-system,Segoe UI,sans-serif;margin:0;padding:18px;font-size:13px}h2{font-size:15px;margin:0 0 6px}p{color:#5f6368;margin:4px 0 14px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #dadce0;padding:7px 9px;text-align:left;font-size:12.5px;vertical-align:top}th{background:#f1f3f4}td.id{font-family:monospace;font-size:11.5px;word-break:break-all}.tag{display:inline-block;background:#1a73e8;color:#fff;font-size:10.5px;padding:1px 6px;border-radius:4px;margin-left:6px}&lt;/style&gt;';
+  html += '&lt;h2&gt;利用可能なカレンダー一覧&lt;/h2&gt;';
+  html += '&lt;p&gt;' + rows.length + '個のカレンダーが利用可能です。下の表のカレンダーIDをコピーして「設定」シートに貼り付けると、そのカレンダーから予定を取得できます。&lt;br&gt;複数指定する場合は改行(Alt+Enter)で区切ります。すべて取得したい場合は &lt;code&gt;all&lt;/code&gt; と入力するだけで OK。&lt;/p&gt;';
+  html += '&lt;table&gt;&lt;tr&gt;&lt;th&gt;カレンダー名&lt;/th&gt;&lt;th&gt;カレンダーID&lt;/th&gt;&lt;/tr&gt;';
+  rows.forEach(function(r) {
+    html += '&lt;tr&gt;&lt;td&gt;' + escapeHtml_(r.name) + (r.isPrimary ? '&lt;span class="tag"&gt;primary&lt;/span&gt;' : '') + '&lt;/td&gt;&lt;td class="id"&gt;' + escapeHtml_(r.id) + '&lt;/td&gt;&lt;/tr&gt;';
+  });
+  html += '&lt;/table&gt;';
+
+  var output = HtmlService.createHtmlOutput(html).setWidth(700).setHeight(540);
+  SpreadsheetApp.getUi().showModalDialog(output, '利用可能なカレンダー一覧');
 }
 
 // ===== 設定シートを開く =====
@@ -827,6 +940,19 @@ function applyStatusConditionalFormat_(sheet, col) {
     .whenTextEqualTo('依頼中').setBackground(COLOR_GRAY).setFontColor(COLOR_GRAY_BD).setRanges([range]).build());
   rules.push(SpreadsheetApp.newConditionalFormatRule()
     .whenTextEqualTo('完了').setBackground(COLOR_GREEN).setFontColor(COLOR_GREEN_BD).setRanges([range]).build());
+  sheet.setConditionalFormatRules(rules);
+}
+
+function removeRulesForRange_(sheet, range) {
+  var rangeA1 = range.getA1Notation();
+  var rules = sheet.getConditionalFormatRules();
+  rules = rules.filter(function(r) {
+    var rs = r.getRanges();
+    for (var i = 0; i &lt; rs.length; i++) {
+      if (rs[i].getA1Notation() === rangeA1) return false;
+    }
+    return true;
+  });
   sheet.setConditionalFormatRules(rules);
 }
 
