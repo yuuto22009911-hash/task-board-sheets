@@ -17,15 +17,33 @@ Google スプレッドシート + Google Apps Script で動くタスク管理表
 - 設定シートでカレンダーID・キーワード・先読み日数・日報テンプレートを変更可能
 - 改善アイデアの投稿フォームを内蔵
 
-## セットアップ (Windows)
+## セットアップ
 
-### 一発インストーラー
+### 方法A: ブラウザだけで完結 (推奨、Windows のセキュリティ警告ナシ)
 
-1. [installer/install.bat](installer/install.bat) を Windows PC にダウンロード
-2. ダブルクリックで実行
-3. 自動で開くブラウザの指示に従って Apps Script をコピー＆ペースト＆実行
+GitHub Pages にホストしたインストーラーページを開きます:
 
-### 手動セットアップ (どの OS でも共通)
+**https://yuuto22009911-hash.github.io/task-board-sheets/**
+
+(GitHub Pages 有効化後にアクセス可能)
+
+ページに表示される手順に従って、ボタンをクリックするだけでセットアップできます。
+Apps Script のコードもページ内の「コードをコピー」ボタンでクリップボードに入ります。
+
+### 方法B: HTML ファイルをダウンロードして開く (オフライン)
+
+1. [installer/install.html](installer/install.html) を右クリック → 「リンク先を別名で保存」 → 任意の場所に保存
+2. 保存した `install.html` をダブルクリック → 既定ブラウザで開く
+3. ページ内の手順通りに進める
+
+HTML ファイルは Windows のセキュリティでブロックされません。
+
+### 方法C: バッチファイル (Windows、セキュリティ警告が出る場合あり)
+
+1. [installer/install.bat](installer/install.bat) をダウンロード → ダブルクリック
+2. 「Windows によって PC が保護されました」が出たら → 「詳細情報」 → 「実行」
+
+### 方法D: 完全手動 (どの OS でも共通)
 
 1. ブラウザで `https://sheets.new` を開いて新規スプレッドシート作成
 2. メニュー `拡張機能 → Apps Script` をクリック
